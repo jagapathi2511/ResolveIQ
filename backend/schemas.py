@@ -35,3 +35,27 @@ class TicketResponse(BaseModel):
     created_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+class AIRequest(BaseModel):
+    issue: str
+    customer_history: str = ""
+
+
+class AIResponse(BaseModel):
+    response: str
+class TicketAnalysisResponse(BaseModel):
+    category: str
+    sentiment: str
+    priority: str
+    summary: str
+
+
+class MemoryChatRequest(BaseModel):
+    customer_id: int
+    issue: str
+
+
+class MemoryChatResponse(BaseModel):
+    customer_id: int
+    previous_memories: list[str]
+    response: str

@@ -42,3 +42,25 @@ class Ticket(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     customer = relationship("Customer", back_populates="tickets")
+
+class TicketAnalysis(Base):
+    __tablename__ = "ticket_analyses"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    ticket_id = Column(
+        Integer,
+        ForeignKey("tickets.id"),
+        unique=True,
+        nullable=False
+    )
+
+    category = Column(String(100), nullable=False)
+    sentiment = Column(String(30), nullable=False)
+    priority = Column(String(30), nullable=False)
+    summary = Column(Text, nullable=False)
+
+    analyzed_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now()
+    )
