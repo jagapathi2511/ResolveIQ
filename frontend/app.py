@@ -1,40 +1,56 @@
-
 import streamlit as st
 import requests
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 
-# ==================================================
-# PAGE CONFIGURATION
-# ==================================================
+# =========================================================
+# 1. PAGE CONFIGURATION
+# =========================================================
 
 st.set_page_config(
     page_title="ResolveIQ | AI Support Agent",
     page_icon="🧠",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
 API_URL = "http://127.0.0.1:8000"
 
+# =========================================================
+# 2. SESSION STATE
+# =========================================================
 
-# ==================================================
-# CUSTOM CSS
-# ==================================================
+if "token" not in st.session_state:
+    st.session_state.token = None
 
-st.markdown("""
-<style>
+if "current_customer" not in st.session_state:
+    st.session_state.current_customer = None
+
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+
+if "troubleshooting_history" not in st.session_state:
+    st.session_state.troubleshooting_history = {}
+
+if "recommendations" not in st.session_state:
+    st.session_state.recommendations = {}
+
+# =========================================================
+# 3. CUSTOM CSS
+# =========================================================
+
+st.markdown(
+    """
+    <style>
     .stApp {
         background-color: #F5F7FB;
     }
 
     [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #172554, #312E81);
+        background-color: #172554;
     }
 
     [data-testid="stSidebar"] * {
-        color: white !important;
+        color: white;
     }
 
     .main-title {
@@ -51,9 +67,8 @@ st.markdown("""
     .metric-card {
         background: white;
         padding: 20px;
-        border-radius: 14px;
+        border-radius: 12px;
         border: 1px solid #E2E8F0;
-        box-shadow: 0 3px 10px rgba(0,0,0,0.04);
     }
 
     .metric-label {
@@ -66,20 +81,22 @@ st.markdown("""
         font-size: 28px;
         font-weight: bold;
     }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
-    div.stButton > button {
-        border-radius: 9px;
-        font-weight: 600;
-    }
-</style>
-""", unsafe_allow_html=True)
+# =========================================================
+# 4. API HELPER
+# =========================================================
 
+def api_request(method, endpoint, data=None, params=None, timeout=60):
+    headers = {}
 
-# ==================================================
-# API HELPER
-# ==================================================
-
-def api_request(method, endpoint, data=None, params=None):
+    if st.session_state.token:
+        headers["Authorization"] = (
+            f"Bearer {st.session_state.token}"
+        )
 
     try:
         response = requests.request(
@@ -87,33 +104,33 @@ def api_request(method, endpoint, data=None, params=None):
             url=f"{API_URL}{endpoint}",
             json=data,
             params=params,
-            timeout=30
+            headers=headers,
+            timeout=timeout
         )
 
         if response.status_code >= 400:
             try:
-                error_detail = response.json().get(
+                detail = response.json().get(
                     "detail",
                     response.text
                 )
             except Exception:
-                error_detail = response.text
+                detail = response.text
 
-            st.error(f"API Error ({response.status_code}): {error_detail}")
+            st.error(
+                f"API Error ({response.status_code}): {detail}"
+            )
             return None
 
-        if response.status_code == 204:
+        if not response.text:
             return {}
 
-        if response.text:
-            return response.json()
-
-        return {}
+        return response.json()
 
     except requests.exceptions.ConnectionError:
         st.error(
-            "Cannot connect to FastAPI. "
-            "Please start the backend using uvicorn."
+            "Cannot connect to the backend. "
+            "Start FastAPI using: uvicorn backend.main:app --reload"
         )
         return None
 
@@ -126,20 +143,34 @@ def api_request(method, endpoint, data=None, params=None):
         return None
 
 
-# ==================================================
-# COMMON DATA HELPERS
-# ==================================================
-
 def get_customers():
-    return api_request("GET", "/customers") or []
+    result = api_request("GET", "/customers")
+
+    if isinstance(result, list):
+        return result
+
+    if isinstance(result, dict):
+        return [result]
+
+    return []
 
 
 def get_tickets():
-    return api_request("GET", "/tickets") or []
+    result = api_request("GET", "/tickets")
+
+    if isinstance(result, list):
+        return result
+
+    return []
 
 
 def get_analyses():
-    return api_request("GET", "/ticket-analyses") or []
+    result = api_request("GET", "/ticket-analyses")
+
+    if isinstance(result, list):
+        return result
+
+    return []
 
 
 def show_page_title(title, subtitle=""):
@@ -169,13 +200,162 @@ def metric_card(label, value, emoji):
     )
 
 
-# ==================================================
-# SIDEBAR NAVIGATION
-# ==================================================
+# =========================================================
+# 5. LOGIN AND REGISTRATION
+# =========================================================
+
+def login_user(email, password):
+    result = api_request(
+        "POST",
+        "/login",
+        data={
+            "email": email,
+            "password": password
+        }
+    )
+
+    if result and result.get("access_token"):
+        st.session_state.token = result["access_token"]
+
+        customers = get_customers()
+
+        if customers:
+            st.session_state.current_customer = customers[0]
+            st.session_state.chat_history = []
+            return True
+
+        st.error(
+            "Login succeeded, but the customer profile "
+            "could not be loaded."
+        )
+        st.session_state.token = None
+
+    return False
+
+
+def authentication_page():
+    st.title("🧠 ResolveIQ")
+    st.subheader("AI-Powered Customer Support Memory Agent")
+
+    st.write(
+        "Welcome! Sign in to manage your support tickets "
+        "and access your AI customer support assistant."
+    )
+
+    login_tab, register_tab = st.tabs(
+        ["Login", "Create Account"]
+    )
+
+    with login_tab:
+        st.markdown("### Login to ResolveIQ")
+
+        with st.form("login_form"):
+            email = st.text_input(
+                "Email Address",
+                key="login_email"
+            )
+
+            password = st.text_input(
+                "Password",
+                type="password",
+                key="login_password"
+            )
+
+            submitted = st.form_submit_button("Login")
+
+            if submitted:
+                if not email or not password:
+                    st.warning("Enter your email and password.")
+                else:
+                    if login_user(email, password):
+                        st.success("Login successful!")
+                        st.rerun()
+
+    with register_tab:
+        st.markdown("### Create Your Account")
+
+        with st.form("register_form"):
+            name = st.text_input("Full Name")
+            email = st.text_input("Email Address")
+            password = st.text_input(
+                "Create Password",
+                type="password"
+            )
+            confirm_password = st.text_input(
+                "Confirm Password",
+                type="password"
+            )
+
+            submitted = st.form_submit_button(
+                "Create Account"
+            )
+
+            if submitted:
+                if not name or not email or not password:
+                    st.warning("Please complete all fields.")
+
+                elif password != confirm_password:
+                    st.error("Passwords do not match.")
+
+                elif len(password) < 8:
+                    st.warning(
+                        "Use a password with at least 8 characters."
+                    )
+
+                else:
+                    result = api_request(
+                        "POST",
+                        "/customers",
+                        data={
+                            "name": name,
+                            "email": email,
+                            "password": password
+                        }
+                    )
+
+                    if result:
+                        st.success(
+                            "Account created successfully. "
+                            "Logging you in..."
+                        )
+
+                        if login_user(email, password):
+                            st.rerun()
+
+
+# =========================================================
+# 6. AUTHENTICATION GATE
+# =========================================================
+
+if not st.session_state.token:
+    authentication_page()
+    st.stop()
+
+customer = st.session_state.current_customer
+
+if not customer:
+    customers = get_customers()
+
+    if customers:
+        customer = customers[0]
+        st.session_state.current_customer = customer
+    else:
+        st.error("Unable to load your customer profile.")
+        st.stop()
+
+customer_id = customer["id"]
+
+# =========================================================
+# 7. SIDEBAR NAVIGATION
+# =========================================================
 
 st.sidebar.title("🧠 ResolveIQ")
 st.sidebar.caption("AI-Powered Customer Support Memory Agent")
 st.sidebar.divider()
+
+st.sidebar.write(
+    f"Logged in as: **{customer.get('name', 'Customer')}**"
+)
 
 page = st.sidebar.radio(
     "Navigation",
@@ -185,40 +365,47 @@ page = st.sidebar.radio(
         "Create Ticket",
         "Ticket Management",
         "AI Support Chat",
-        "Ticket Analysis"
+        "Ticket Analysis",
+        "Customer Memory Profile"
     ]
 )
 
 st.sidebar.divider()
-st.sidebar.info("ResolveIQ | Intelligent Customer Support")
 
+if st.sidebar.button("Logout"):
+    st.session_state.token = None
+    st.session_state.current_customer = None
+    st.session_state.chat_history = []
+    st.session_state.troubleshooting_history = {}
+    st.session_state.recommendations = {}
+    st.rerun()
 
-# ==================================================
-# 1. DASHBOARD
-# ==================================================
+st.sidebar.caption("ResolveIQ | Intelligent Customer Support")
+
+# =========================================================
+# 8. DASHBOARD
+# =========================================================
 
 if page == "Dashboard":
 
     show_page_title(
         "📊 Dashboard",
-        "Monitor customer support performance and AI insights."
+        "Monitor your customer support performance."
     )
 
     tickets = get_tickets()
-    customers = get_customers()
     analyses = get_analyses()
 
-    if tickets is None:
-        st.stop()
-
-    ticket_df = pd.DataFrame(tickets)
-
     total_tickets = len(tickets)
-    total_customers = len(customers)
 
     open_tickets = sum(
         1 for ticket in tickets
         if ticket.get("status") == "open"
+    )
+
+    in_progress = sum(
+        1 for ticket in tickets
+        if ticket.get("status") == "in_progress"
     )
 
     resolved_tickets = sum(
@@ -226,800 +413,595 @@ if page == "Dashboard":
         if ticket.get("status") == "resolved"
     )
 
-    resolution_rate = (
-        round((resolved_tickets / total_tickets) * 100, 1)
-        if total_tickets else 0
-    )
+    col1, col2, col3, col4 = st.columns(4)
 
-    # KPI cards
-
-    c1, c2, c3, c4 = st.columns(4)
-
-    with c1:
+    with col1:
         metric_card("Total Tickets", total_tickets, "🎫")
 
-    with c2:
-        metric_card("Total Customers", total_customers, "👥")
-
-    with c3:
+    with col2:
         metric_card("Open Tickets", open_tickets, "📂")
 
-    with c4:
-        metric_card("Resolution Rate", f"{resolution_rate}%", "✅")
+    with col3:
+        metric_card("In Progress", in_progress, "⏳")
+
+    with col4:
+        metric_card("Resolved", resolved_tickets, "✅")
 
     st.divider()
 
-    # Ticket filters
+    if tickets:
+        ticket_df = pd.DataFrame(tickets)
 
-    st.subheader("🎯 Ticket Overview")
+        st.subheader("Ticket Overview")
 
-    if not ticket_df.empty:
+        st.dataframe(
+            ticket_df,
+            width="stretch",
+            hide_index=True
+        )
 
-        filter1, filter2 = st.columns(2)
+        chart_col1, chart_col2 = st.columns(2)
 
-        with filter1:
-            status_options = ["All"] + sorted(
-                ticket_df["status"].dropna().unique().tolist()
-            )
-
-            selected_status = st.selectbox(
-                "Filter by Status",
-                status_options
-            )
-
-        with filter2:
-            priority_options = ["All"] + sorted(
-                ticket_df["priority"].dropna().unique().tolist()
-            )
-
-            selected_priority = st.selectbox(
-                "Filter by Priority",
-                priority_options
-            )
-
-        filtered_df = ticket_df.copy()
-
-        if selected_status != "All":
-            filtered_df = filtered_df[
-                filtered_df["status"] == selected_status
-            ]
-
-        if selected_priority != "All":
-            filtered_df = filtered_df[
-                filtered_df["priority"] == selected_priority
-            ]
-
-        # Status chart
-
-        chart1, chart2 = st.columns(2)
-
-        with chart1:
-
-            status_data = (
-                ticket_df["status"]
-                .value_counts()
-                .reset_index()
-            )
-
-            status_data.columns = ["Status", "Count"]
-
-            fig_status = px.pie(
-                status_data,
-                names="Status",
-                values="Count",
-                hole=0.55,
-                title="Ticket Status Distribution",
-                color_discrete_sequence=px.colors.qualitative.Set2
-            )
-
-            fig_status.update_layout(
-                template="plotly_white",
-                height=350
-            )
-
-            st.plotly_chart(
-                fig_status,
-                use_container_width=True
-            )
-
-        # Priority chart
-
-        with chart2:
-
-            priority_data = (
-                ticket_df["priority"]
-                .value_counts()
-                .reset_index()
-            )
-
-            priority_data.columns = ["Priority", "Count"]
-
-            fig_priority = px.bar(
-                priority_data,
-                x="Priority",
-                y="Count",
-                color="Priority",
-                text="Count",
-                title="Ticket Priority Distribution",
-                color_discrete_sequence=px.colors.qualitative.Bold
-            )
-
-            fig_priority.update_layout(
-                template="plotly_white",
-                height=350,
-                showlegend=False
-            )
-
-            st.plotly_chart(
-                fig_priority,
-                use_container_width=True
-            )
-
-        # Customer ticket chart
-
-        if "customer_id" in ticket_df.columns:
-
-            customer_counts = (
-                ticket_df.groupby("customer_id")
-                .size()
-                .reset_index(name="Tickets")
-            )
-
-            customer_counts["Customer"] = (
-                customer_counts["customer_id"].apply(
-                    lambda customer_id: next(
-                        (
-                            customer.get("name", f"Customer {customer_id}")
-                            for customer in customers
-                            if customer.get("id") == customer_id
-                        ),
-                        f"Customer {customer_id}"
-                    )
+        with chart_col1:
+            if "status" in ticket_df.columns:
+                status_counts = (
+                    ticket_df["status"]
+                    .value_counts()
+                    .reset_index()
                 )
-            )
+                status_counts.columns = ["Status", "Count"]
 
-            fig_customer = px.bar(
-                customer_counts.sort_values(
-                    "Tickets",
-                    ascending=True
-                ),
-                x="Tickets",
-                y="Customer",
-                orientation="h",
-                title="Tickets by Customer",
-                text="Tickets",
-                color="Tickets",
-                color_continuous_scale="Blues"
-            )
-
-            fig_customer.update_layout(
-                template="plotly_white",
-                height=350
-            )
-
-            st.plotly_chart(
-                fig_customer,
-                use_container_width=True
-            )
-
-        # Ticket creation trend
-
-        if "created_at" in ticket_df.columns:
-
-            trend_df = ticket_df.copy()
-
-            trend_df["created_at"] = pd.to_datetime(
-                trend_df["created_at"],
-                errors="coerce"
-            )
-
-            trend_df = trend_df.dropna(
-                subset=["created_at"]
-            )
-
-            if not trend_df.empty:
-
-                trend_df["Date"] = (
-                    trend_df["created_at"].dt.date
-                )
-
-                daily_tickets = (
-                    trend_df.groupby("Date")
-                    .size()
-                    .reset_index(name="Tickets")
-                )
-
-                fig_trend = px.line(
-                    daily_tickets,
-                    x="Date",
-                    y="Tickets",
-                    markers=True,
-                    title="Daily Ticket Creation Trend"
-                )
-
-                fig_trend.update_layout(
-                    template="plotly_white",
-                    height=350
+                fig = px.pie(
+                    status_counts,
+                    names="Status",
+                    values="Count",
+                    hole=0.45,
+                    title="Tickets by Status"
                 )
 
                 st.plotly_chart(
-                    fig_trend,
-                    use_container_width=True
+                    fig,
+                    width="stretch"
                 )
 
-        st.subheader("📋 Ticket Records")
+        with chart_col2:
+            if "priority" in ticket_df.columns:
+                priority_counts = (
+                    ticket_df["priority"]
+                    .value_counts()
+                    .reset_index()
+                )
+                priority_counts.columns = ["Priority", "Count"]
 
-        st.dataframe(
-            filtered_df,
-            use_container_width=True,
-            hide_index=True
-        )
+                fig = px.bar(
+                    priority_counts,
+                    x="Priority",
+                    y="Count",
+                    color="Priority",
+                    title="Tickets by Priority"
+                )
+
+                st.plotly_chart(
+                    fig,
+                    width="stretch"
+                )
 
     else:
-        st.info("No tickets available. Create your first ticket.")
-
-    # ------------------------------------------
-    # AI SENTIMENT ANALYTICS
-    # ------------------------------------------
+        st.info(
+            "No support tickets found. "
+            "Create your first ticket to get started."
+        )
 
     st.divider()
-
-    st.subheader("🧠 AI Customer Sentiment Analytics")
-
-    if st.button("🚀 Analyze All Tickets with AI"):
-
-        if tickets:
-
-            progress = st.progress(0)
-            success_count = 0
-
-            for index, ticket in enumerate(tickets):
-
-                result = api_request(
-                    "POST",
-                    f"/tickets/{ticket['id']}/analyze"
-                )
-
-                if result is not None:
-                    success_count += 1
-
-                progress.progress(
-                    (index + 1) / len(tickets)
-                )
-
-            st.success(
-                f"Successfully analyzed {success_count} "
-                f"out of {len(tickets)} tickets."
-            )
-
-            st.rerun()
-
-        else:
-            st.info("No tickets available for analysis.")
-
-    # Reload saved analyses
-
-    analyses = get_analyses()
+    st.subheader("AI Insights")
 
     if analyses:
+        analysis_df = pd.DataFrame(analyses)
 
-        sentiment_df = pd.DataFrame(analyses)
-
-        sentiment_df["sentiment"] = (
-            sentiment_df["sentiment"]
-            .astype(str)
-            .str.title()
-        )
-
-        positive = int(
-            (sentiment_df["sentiment"] == "Positive").sum()
-        )
-
-        neutral = int(
-            (sentiment_df["sentiment"] == "Neutral").sum()
-        )
-
-        negative = int(
-            (sentiment_df["sentiment"] == "Negative").sum()
-        )
-
-        # Sentiment KPI cards
-
-        s1, s2, s3 = st.columns(3)
-
-        with s1:
-            metric_card("Positive Sentiment", positive, "😊")
-
-        with s2:
-            metric_card("Neutral Sentiment", neutral, "😐")
-
-        with s3:
-            metric_card("Negative Sentiment", negative, "😠")
-
-        st.write("")
-
-        sentiment_chart, category_chart = st.columns(2)
-
-        # Sentiment donut chart
-
-        with sentiment_chart:
-
-            sentiment_data = pd.DataFrame({
-                "Sentiment": [
-                    "Positive",
-                    "Neutral",
-                    "Negative"
-                ],
-                "Count": [
-                    positive,
-                    neutral,
-                    negative
-                ]
-            })
-
-            fig_sentiment = px.pie(
-                sentiment_data,
-                names="Sentiment",
-                values="Count",
-                hole=0.55,
-                title="Customer Sentiment Distribution",
-                color="Sentiment",
-                color_discrete_map={
-                    "Positive": "#20BF6B",
-                    "Neutral": "#FFB020",
-                    "Negative": "#EE4266"
-                }
-            )
-
-            fig_sentiment.update_layout(
-                template="plotly_white",
-                height=400
-            )
-
-            st.plotly_chart(
-                fig_sentiment,
-                use_container_width=True
-            )
-
-        # Category chart
-
-        with category_chart:
-
-            category_data = (
-                sentiment_df["category"]
+        if "sentiment" in analysis_df.columns:
+            sentiment_counts = (
+                analysis_df["sentiment"]
                 .value_counts()
                 .reset_index()
             )
+            sentiment_counts.columns = ["Sentiment", "Count"]
 
-            category_data.columns = [
-                "Category",
-                "Tickets"
-            ]
-
-            fig_category = px.bar(
-                category_data,
-                x="Category",
-                y="Tickets",
-                color="Category",
-                text="Tickets",
-                title="Ticket Category Distribution",
-                color_discrete_sequence=px.colors.qualitative.Bold
-            )
-
-            fig_category.update_layout(
-                template="plotly_white",
-                height=400,
-                showlegend=False
+            fig = px.pie(
+                sentiment_counts,
+                names="Sentiment",
+                values="Count",
+                title="Customer Sentiment Distribution"
             )
 
             st.plotly_chart(
-                fig_category,
-                use_container_width=True
+                fig,
+                width="stretch"
             )
 
-        # Saved analysis records
-
-        st.subheader("📋 AI Ticket Analysis Records")
-
-        display_columns = [
-            "ticket_id",
-            "category",
-            "sentiment",
-            "priority",
-            "summary"
-        ]
-
         st.dataframe(
-            sentiment_df[display_columns],
-            use_container_width=True,
+            analysis_df,
+            width="stretch",
             hide_index=True
         )
 
     else:
-
         st.info(
-            "No saved AI analysis found. "
-            "Click 'Analyze All Tickets with AI' to begin."
+            "No AI analysis available yet. "
+            "Analyze tickets to see AI insights."
         )
 
 
-# ==================================================
-# 2. CUSTOMER MANAGEMENT
-# ==================================================
+# =========================================================
+# 9. CUSTOMER PROFILE
+# =========================================================
 
 elif page == "Customers":
 
     show_page_title(
-        "👥 Customer Management",
-        "Create and view registered customers."
+        "👤 Customer Profile",
+        "View your registered customer information."
     )
 
-    tab1, tab2 = st.tabs([
-        "➕ Add Customer",
-        "📋 Customer List"
-    ])
+    st.subheader("Your Account Details")
 
-    with tab1:
+    col1, col2 = st.columns(2)
 
-        st.subheader("Register New Customer")
+    with col1:
+        st.text_input(
+            "Customer ID",
+            value=str(customer.get("id", "")),
+            disabled=True
+        )
 
-        with st.form("customer_form"):
+        st.text_input(
+            "Customer Name",
+            value=customer.get("name", ""),
+            disabled=True
+        )
 
-            name = st.text_input("Customer Name")
+    with col2:
+        st.text_input(
+            "Email Address",
+            value=customer.get("email", ""),
+            disabled=True
+        )
 
-            email = st.text_input("Customer Email")
+    st.info(
+        "Your account is linked to your support tickets "
+        "and customer-specific AI memory."
+    )
 
-            submit = st.form_submit_button(
-                "Create Customer",
-                use_container_width=True
-            )
+    st.divider()
 
-            if submit:
+    st.subheader("Your Support History")
 
-                if not name.strip() or not email.strip():
-                    st.warning("Please enter name and email.")
+    tickets = get_tickets()
 
-                else:
-
-                    result = api_request(
-                        "POST",
-                        "/customers",
-                        data={
-                            "name": name,
-                            "email": email
-                        }
-                    )
-
-                    if result is not None:
-                        st.success("Customer created successfully!")
-                        st.json(result)
-
-    with tab2:
-
-        st.subheader("Registered Customers")
-
-        customers = get_customers()
-
-        if customers:
-
-            st.dataframe(
-                pd.DataFrame(customers),
-                use_container_width=True,
-                hide_index=True
-            )
-
-        else:
-            st.info("No customers registered yet.")
+    if tickets:
+        st.dataframe(
+            pd.DataFrame(tickets),
+            width="stretch",
+            hide_index=True
+        )
+    else:
+        st.info("You have not created any support tickets yet.")
 
 
-# ==================================================
-# 3. CREATE TICKET
-# ==================================================
+# =========================================================
+# 10. CREATE SUPPORT TICKET
+# =========================================================
 
 elif page == "Create Ticket":
 
     show_page_title(
         "🎫 Create Support Ticket",
-        "Register a new customer support issue."
+        "Submit a new customer support issue."
     )
 
-    customers = get_customers()
+    with st.form("ticket_form"):
 
-    if customers:
-
-        customer_options = {
-            f"{customer['name']} ({customer['email']})":
-            customer["id"]
-            for customer in customers
-        }
-
-        with st.form("ticket_form"):
-
-            selected_customer = st.selectbox(
-                "Select Customer",
-                list(customer_options.keys())
-            )
-
-            subject = st.text_input(
-                "Ticket Subject"
-            )
-
-            description = st.text_area(
-                "Describe the Issue",
-                height=150
-            )
-
-            priority = st.selectbox(
-                "Priority",
-                ["low", "normal", "high", "urgent"]
-            )
-
-            submit = st.form_submit_button(
-                "Create Ticket",
-                use_container_width=True
-            )
-
-            if submit:
-
-                if not subject.strip() or not description.strip():
-                    st.warning(
-                        "Please enter the subject and description."
-                    )
-
-                else:
-
-                    result = api_request(
-                        "POST",
-                        "/tickets",
-                        data={
-                            "customer_id": customer_options[
-                                selected_customer
-                            ],
-                            "subject": subject,
-                            "description": description,
-                            "priority": priority
-                        }
-                    )
-
-                    if result is not None:
-                        st.success("Ticket created successfully!")
-                        st.json(result)
-
-    else:
-
-        st.warning(
-            "No customers found. Please create a customer first."
+        st.text_input(
+            "Customer",
+            value=customer.get("name", ""),
+            disabled=True
         )
 
+        subject = st.text_input("Ticket Subject")
 
-# ==================================================
-# 4. TICKET MANAGEMENT
-# ==================================================
+        description = st.text_area(
+            "Describe Your Issue",
+            height=150
+        )
+
+        priority = st.selectbox(
+            "Priority",
+            ["low", "medium", "high", "critical"]
+        )
+
+        submitted = st.form_submit_button(
+            "Create Support Ticket"
+        )
+
+        if submitted:
+
+            if not subject.strip() or not description.strip():
+                st.warning(
+                    "Please enter both the subject and description."
+                )
+
+            else:
+                result = api_request(
+                    "POST",
+                    "/tickets",
+                    data={
+                        "customer_id": customer_id,
+                        "subject": subject,
+                        "description": description,
+                        "priority": priority
+                    }
+                )
+
+                if result:
+                    st.success("Ticket created successfully!")
+                    st.json(result)
+                    st.rerun()
+
+
+# =========================================================
+# 11. TICKET MANAGEMENT
+# =========================================================
 
 elif page == "Ticket Management":
 
     show_page_title(
         "🛠️ Ticket Management",
-        "Track tickets and update their status."
+        "Manage tickets and review AI troubleshooting recommendations."
     )
 
     tickets = get_tickets()
 
-    if tickets:
+    if not tickets:
+        st.info("No tickets available.")
+        st.stop()
 
-        for ticket in tickets:
+    for ticket in tickets:
 
-            with st.container(border=True):
+        ticket_id = ticket["id"]
 
-                col1, col2 = st.columns([3, 1])
+        with st.expander(
+            f"Ticket #{ticket_id} — {ticket.get('subject', 'Support Issue')}",
+            expanded=False
+        ):
+
+            st.write(
+                "**Description:**",
+                ticket.get("description", "")
+            )
+
+            st.write(
+                "**Current Status:**",
+                ticket.get("status", "N/A")
+            )
+
+            st.write(
+                "**Priority:**",
+                ticket.get("priority", "N/A")
+            )
+
+            st.divider()
+
+            st.markdown("### Update Ticket Status")
+
+            status_options = [
+                "open",
+                "in_progress",
+                "resolved"
+            ]
+
+            current_status = ticket.get("status", "open")
+
+            if current_status not in status_options:
+                current_status = "open"
+
+            new_status = st.selectbox(
+                "Select Status",
+                status_options,
+                index=status_options.index(current_status),
+                key=f"status_{ticket_id}"
+            )
+
+            if st.button(
+                "Update Status",
+                key=f"update_{ticket_id}"
+            ):
+                result = api_request(
+                    "PATCH",
+                    f"/tickets/{ticket_id}/status",
+                    params={"status": new_status}
+                )
+
+                if result is not None:
+                    st.success("Ticket status updated.")
+                    st.rerun()
+
+            st.divider()
+
+            st.markdown("### AI Ticket Analysis")
+
+            if st.button(
+                "Analyze This Ticket",
+                key=f"analyze_{ticket_id}"
+            ):
+                result = api_request(
+                    "POST",
+                    f"/tickets/{ticket_id}/analyze"
+                )
+
+                if result:
+                    st.success("Ticket analyzed.")
+                    st.json(result)
+
+            st.divider()
+
+            st.markdown("### Troubleshooting History")
+
+            if st.button(
+                "Load Troubleshooting History",
+                key=f"history_{ticket_id}"
+            ):
+                history = api_request(
+                    "GET",
+                    f"/tickets/{ticket_id}/troubleshooting-attempts"
+                )
+
+                if history is not None:
+                    st.session_state.troubleshooting_history[
+                        ticket_id
+                    ] = history
+
+            history = st.session_state.troubleshooting_history.get(
+                ticket_id
+            )
+
+            if history is not None:
+
+                if history:
+                    history_df = pd.DataFrame(history)
+
+                    st.dataframe(
+                        history_df,
+                        width="stretch",
+                        hide_index=True
+                    )
+
+                    if "outcome" in history_df.columns:
+                        outcomes = (
+                            history_df["outcome"]
+                            .astype(str)
+                            .str.lower()
+                        )
+
+                        successful = outcomes.str.contains(
+                            "success"
+                        ).sum()
+
+                        failed = outcomes.str.contains(
+                            "fail"
+                        ).sum()
+
+                        col1, col2, col3 = st.columns(3)
+
+                        col1.metric(
+                            "Total Attempts",
+                            len(history_df)
+                        )
+
+                        col2.metric(
+                            "Successful",
+                            int(successful)
+                        )
+
+                        col3.metric(
+                            "Failed",
+                            int(failed)
+                        )
+
+                else:
+                    st.info(
+                        "No troubleshooting attempts recorded yet."
+                    )
+
+            st.divider()
+
+            st.markdown("### AI Next Recommendation")
+
+            if st.button(
+                "Generate Next Recommendation",
+                key=f"recommend_{ticket_id}"
+            ):
+                recommendation = api_request(
+                    "POST",
+                    f"/tickets/{ticket_id}/next-recommendation"
+                )
+
+                if recommendation:
+                    st.session_state.recommendations[
+                        ticket_id
+                    ] = recommendation
+
+            recommendation = st.session_state.recommendations.get(
+                ticket_id
+            )
+
+            if recommendation:
+
+                st.info(
+                    recommendation.get(
+                        "recommendation",
+                        str(recommendation)
+                    )
+                )
+
+                st.caption(
+                    "Previous attempts: "
+                    f"{recommendation.get('previous_attempts', 'N/A')}"
+                )
+
+                feedback_notes = st.text_area(
+                    "Customer Feedback / Notes",
+                    key=f"feedback_{ticket_id}"
+                )
+
+                col1, col2 = st.columns(2)
 
                 with col1:
-
-                    st.markdown(
-                        f"### Ticket #{ticket['id']} "
-                        f"- {ticket['subject']}"
-                    )
-
-                    st.write(
-                        ticket.get("description", "")
-                    )
-
-                    st.caption(
-                        f"Customer ID: {ticket['customer_id']} | "
-                        f"Priority: {ticket['priority']}"
-                    )
-
-                with col2:
-
-                    st.write(
-                        f"**Status:** {ticket['status']}"
-                    )
-
-                    status_options = [
-                        "open",
-                        "in_progress",
-                        "resolved"
-                    ]
-
-                    current_status = ticket.get(
-                        "status",
-                        "open"
-                    )
-
-                    selected_status = st.selectbox(
-                        "Update Status",
-                        status_options,
-                        index=(
-                            status_options.index(current_status)
-                            if current_status in status_options
-                            else 0
-                        ),
-                        key=f"status_{ticket['id']}"
-                    )
-
                     if st.button(
-                        "Update Status",
-                        key=f"update_{ticket['id']}"
+                        "✅ It Worked",
+                        key=f"success_{ticket_id}"
                     ):
-
                         result = api_request(
-                            "PATCH",
-                            f"/tickets/{ticket['id']}/status",
-                            params={
-                                "status": selected_status
+                            "POST",
+                            f"/tickets/{ticket_id}/troubleshooting-feedback",
+                            data={
+                                "customer_id": customer_id,
+                                "ticket_id": ticket_id,
+                                "successful": True,
+                                "notes": feedback_notes
                             }
                         )
 
                         if result is not None:
-                            st.success("Status updated!")
+                            st.success(
+                                "Successful feedback recorded."
+                            )
+                            st.session_state.recommendations.pop(
+                                ticket_id,
+                                None
+                            )
                             st.rerun()
 
+                with col2:
                     if st.button(
-                        "🧠 Analyze Ticket",
-                        key=f"analyze_{ticket['id']}"
+                        "❌ It Did Not Work",
+                        key=f"failure_{ticket_id}"
                     ):
-
                         result = api_request(
                             "POST",
-                            f"/tickets/{ticket['id']}/analyze"
+                            f"/tickets/{ticket_id}/troubleshooting-feedback",
+                            data={
+                                "customer_id": customer_id,
+                                "ticket_id": ticket_id,
+                                "successful": False,
+                                "notes": feedback_notes
+                            }
                         )
 
                         if result is not None:
-                            st.success("AI analysis completed!")
-                            st.json(result)
+                            st.warning(
+                                "Unsuccessful feedback recorded."
+                            )
+                            st.session_state.recommendations.pop(
+                                ticket_id,
+                                None
+                            )
+                            st.rerun()
 
 
-    else:
-
-        st.info("No tickets available.")
-
-
-# ==================================================
-# 5. AI SUPPORT CHAT
-# ==================================================
+# =========================================================
+# 12. AI SUPPORT CHAT
+# =========================================================
 
 elif page == "AI Support Chat":
 
     show_page_title(
         "🤖 AI Support Chat",
-        "Chat with ResolveIQ using customer-specific memory."
+        "Chat with an AI assistant that uses customer-specific memory."
     )
 
-    customers = get_customers()
+    st.info(
+        "ResolveIQ uses previous customer support interactions "
+        "to help avoid repeating unsuccessful troubleshooting steps."
+    )
 
-    if customers:
+    for message in st.session_state.chat_history:
 
-        customer_options = {
-            f"{customer['name']} ({customer['email']})":
-            customer["id"]
-            for customer in customers
-        }
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
 
-        selected_customer = st.selectbox(
-            "Select Customer",
-            list(customer_options.keys())
-        )
+    user_input = st.chat_input(
+        "Describe your support issue..."
+    )
 
-        customer_id = customer_options[selected_customer]
+    if user_input:
 
-        if "chat_histories" not in st.session_state:
-            st.session_state.chat_histories = {}
-
-        if customer_id not in st.session_state.chat_histories:
-            st.session_state.chat_histories[customer_id] = []
-
-        chat_history = st.session_state.chat_histories[
-            customer_id
-        ]
-
-        # Display chat history
-
-        for message in chat_history:
-
-            with st.chat_message(message["role"]):
-                st.markdown(message["content"])
-
-        # Chat input
-
-        user_input = st.chat_input(
-            "Describe your customer support issue..."
-        )
-
-        if user_input:
-
-            chat_history.append({
+        st.session_state.chat_history.append(
+            {
                 "role": "user",
                 "content": user_input
-            })
+            }
+        )
 
-            with st.chat_message("user"):
-                st.markdown(user_input)
+        with st.chat_message("user"):
+            st.markdown(user_input)
 
-            with st.chat_message("assistant"):
+        with st.chat_message("assistant"):
 
-                with st.spinner(
-                    "ResolveIQ is checking customer memory..."
-                ):
+            with st.spinner(
+                "ResolveIQ is checking customer memory..."
+            ):
+                result = api_request(
+                    "POST",
+                    "/ai/memory-chat",
+                    data={
+                        "customer_id": customer_id,
+                        "issue": user_input
+                    },
+                    timeout=120
+                )
 
-                    result = api_request(
-                        "POST",
-                        "/ai/memory-chat",
-                        data={
-                            "customer_id": customer_id,
-                            "issue": user_input
+                if result:
+
+                    response_text = result.get(
+                        "response",
+                        "No response received."
+                    )
+
+                    st.markdown(response_text)
+
+                    st.session_state.chat_history.append(
+                        {
+                            "role": "assistant",
+                            "content": response_text
                         }
                     )
 
-                    if result is not None:
+                    previous_memories = result.get(
+                        "previous_memories",
+                        []
+                    )
 
-                        response_text = result.get(
-                            "response",
-                            "No response received."
-                        )
+                    if previous_memories:
+                        with st.expander(
+                            "🧠 Previous Customer Memories"
+                        ):
+                            for memory in previous_memories:
+                                st.write(f"• {memory}")
 
-                        previous_memories = result.get(
-                            "previous_memories",
-                            []
-                        )
+                else:
+                    st.error(
+                        "Unable to get a response from ResolveIQ."
+                    )
 
-                        st.markdown(response_text)
+        st.rerun()
 
-                        if previous_memories:
-
-                            with st.expander(
-                                "🧠 Previous Customer Memories"
-                            ):
-
-                                for memory in previous_memories:
-                                    st.write(f"• {memory}")
-
-                        chat_history.append({
-                            "role": "assistant",
-                            "content": response_text
-                        })
-
-                    else:
-
-                        st.error(
-                            "Unable to get a response from ResolveIQ."
-                        )
-
-            st.rerun()
-
-        if st.button("Clear Current Chat"):
-            st.session_state.chat_histories[customer_id] = []
-            st.rerun()
-
-    else:
-
-        st.warning(
-            "Please create a customer before using AI Support Chat."
-        )
+    if st.button("Clear Chat History"):
+        st.session_state.chat_history = []
+        st.rerun()
 
 
-# ==================================================
-# 6. TICKET ANALYSIS
-# ==================================================
+# =========================================================
+# 13. AI TICKET ANALYSIS
+# =========================================================
 
 elif page == "Ticket Analysis":
 
@@ -1028,14 +1010,12 @@ elif page == "Ticket Analysis":
         "Analyze ticket category, sentiment, priority and summary."
     )
 
-    tab1, tab2 = st.tabs([
-        "Analyze Existing Ticket",
-        "Analyze Custom Issue"
-    ])
-
-    # ------------------------------------------
-    # ANALYZE EXISTING TICKET
-    # ------------------------------------------
+    tab1, tab2 = st.tabs(
+        [
+            "Analyze Existing Ticket",
+            "Analyze Custom Issue"
+        ]
+    )
 
     with tab1:
 
@@ -1044,143 +1024,169 @@ elif page == "Ticket Analysis":
         if tickets:
 
             ticket_options = {
-                f"Ticket #{ticket['id']} - {ticket['subject']}":
-                ticket
+                (
+                    f"Ticket #{ticket['id']} — "
+                    f"{ticket.get('subject', 'Support Issue')}"
+                ): ticket
                 for ticket in tickets
             }
 
-            selected_ticket_name = st.selectbox(
-                "Select Ticket",
+            selected_name = st.selectbox(
+                "Select a Ticket",
                 list(ticket_options.keys())
             )
 
-            selected_ticket = ticket_options[
-                selected_ticket_name
-            ]
+            selected_ticket = ticket_options[selected_name]
 
             st.write("**Issue Description:**")
-            st.write(selected_ticket["description"])
+            st.write(
+                selected_ticket.get("description", "")
+            )
 
-            if st.button(
-                "🧠 Analyze and Save",
-                use_container_width=True
-            ):
+            if st.button("Analyze and Save Ticket"):
 
-                with st.spinner("AI is analyzing the ticket..."):
+                result = api_request(
+                    "POST",
+                    f"/tickets/{selected_ticket['id']}/analyze"
+                )
 
-                    result = api_request(
-                        "POST",
-                        f"/tickets/{selected_ticket['id']}/analyze"
-                    )
-
-                if result is not None:
-
-                    st.success(
-                        "Ticket analyzed and saved successfully!"
-                    )
-
-                    a1, a2, a3 = st.columns(3)
-
-                    a1.metric(
-                        "Category",
-                        result.get("category", "N/A")
-                    )
-
-                    a2.metric(
-                        "Sentiment",
-                        result.get("sentiment", "N/A")
-                    )
-
-                    a3.metric(
-                        "Priority",
-                        result.get("priority", "N/A")
-                    )
-
-                    st.subheader("AI Summary")
-
-                    st.write(
-                        result.get("summary", "No summary available.")
-                    )
+                if result:
+                    st.success("Analysis completed.")
+                    st.json(result)
 
         else:
-
-            st.info("Create a ticket before analyzing it.")
-
-    # ------------------------------------------
-    # ANALYZE CUSTOM ISSUE
-    # ------------------------------------------
+            st.info("No tickets available for analysis.")
 
     with tab2:
 
-        st.subheader("Analyze a Custom Customer Issue")
-
-        issue = st.text_area(
-            "Enter Customer Issue",
+        custom_issue = st.text_area(
+            "Enter a Customer Issue",
             height=150,
-            key="custom_analysis_issue"
+            placeholder="Example: My internet connection keeps disconnecting."
         )
 
-        customer_history = st.text_area(
-            "Previous Customer History (Optional)",
-            height=100,
-            key="custom_analysis_history"
-        )
+        if st.button("Analyze Custom Issue"):
 
-        if st.button(
-            "Analyze Custom Issue",
-            use_container_width=True
-        ):
-
-            if not issue.strip():
-
-                st.warning("Please enter a customer issue.")
+            if not custom_issue.strip():
+                st.warning("Please enter an issue.")
 
             else:
+                result = api_request(
+                    "POST",
+                    "/ai/analyze",
+                    data={
+                        "issue": custom_issue,
+                        "customer_history": ""
+                    }
+                )
 
-                with st.spinner("ResolveIQ is analyzing..."):
+                if result:
+                    st.success("AI analysis completed.")
+                    st.json(result)
 
-                    result = api_request(
-                        "POST",
-                        "/ai/analyze",
-                        data={
-                            "issue": issue,
-                            "customer_history": customer_history
-                        }
-                    )
+    st.divider()
 
-                if result is not None:
+    st.subheader("Previous Ticket Analysis Records")
 
-                    st.success("AI analysis completed!")
+    analyses = get_analyses()
 
-                    if isinstance(result, dict):
-
-                        if "category" in result:
-
-                            st.json(result)
-
-                        elif "response" in result:
-
-                            st.write(result["response"])
-
-                        else:
-
-                            st.json(result)
-
-                    else:
-
-                        st.write(result)
+    if analyses:
+        st.dataframe(
+            pd.DataFrame(analyses),
+            width="stretch",
+            hide_index=True
+        )
+    else:
+        st.info("No previous analysis records found.")
 
 
-# ==================================================
-# FOOTER
-# ==================================================
+# =========================================================
+# 14. CUSTOMER MEMORY PROFILE
+# =========================================================
 
-st.sidebar.divider()
+elif page == "Customer Memory Profile":
 
-st.sidebar.caption(
-    "ResolveIQ | AI-Powered Customer Support"
-)
+    show_page_title(
+        "🧠 Customer Memory Profile",
+        "Understand customer patterns using AI-powered memory insights."
+    )
 
-st.sidebar.caption(
-    "Built with Python, FastAPI, Streamlit, Groq and Hindsight"
+    st.subheader("Customer Information")
+
+    st.write(f"**Name:** {customer.get('name', '')}")
+    st.write(f"**Email:** {customer.get('email', '')}")
+    st.write(f"**Customer ID:** {customer_id}")
+
+    st.divider()
+
+    st.subheader("AI Customer Memory Insights")
+
+    st.write(
+        "Generate a report based on previous support tickets "
+        "and troubleshooting history."
+    )
+
+    if st.button("✨ Generate AI Memory Insights"):
+
+        with st.spinner(
+            "AI is analyzing customer support history..."
+        ):
+            result = api_request(
+                "GET",
+                f"/customers/{customer_id}/memory-insights",
+                timeout=120
+            )
+
+        if result:
+
+            st.success("AI Memory Insights Generated!")
+
+            if "customer_name" in result:
+                st.markdown(
+                    f"### Customer: {result['customer_name']}"
+                )
+
+            if "total_tickets" in result:
+                st.metric(
+                    "Total Support Tickets",
+                    result["total_tickets"]
+                )
+
+            if "insights" in result:
+                st.markdown("### 📊 AI Analysis Report")
+                st.markdown(result["insights"])
+            else:
+                st.json(result)
+
+    st.divider()
+
+    st.subheader("Your Ticket History")
+
+    tickets = get_tickets()
+
+    if tickets:
+        st.dataframe(
+            pd.DataFrame(tickets),
+            width="stretch",
+            hide_index=True
+        )
+    else:
+        st.info("No support ticket history available.")
+
+
+# =========================================================
+# 15. FOOTER
+# =========================================================
+
+st.divider()
+
+st.markdown(
+    """
+    <div style="text-align:center; color:#64748B; padding:15px;">
+        <b>ResolveIQ</b> | AI-Powered Customer Support Memory Agent
+        <br>
+        Built with Python, FastAPI, Streamlit, Groq AI and Hindsight Memory
+    </div>
+    """,
+    unsafe_allow_html=True
 )

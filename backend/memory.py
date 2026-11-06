@@ -73,3 +73,36 @@ def recall_customer_memory(customer_id: int, query: str):
     )
 
     return [memory.text for memory in result.results]
+
+def store_troubleshooting_memory(
+    customer_id: int,
+    ticket_id: int,
+    step: str,
+    outcome: str,
+    notes: str = ""
+):
+    client = get_hindsight_client()
+
+    bank_id = f"customer-{customer_id}"
+
+    content = f"""
+Customer ID: {customer_id}
+Ticket ID: {ticket_id}
+Troubleshooting step: {step}
+Outcome: {outcome}
+Additional notes: {notes if notes else "No additional notes."}
+
+Remember the exact outcome:
+- suggested means only recommended
+- attempted means customer tried it
+- failed means it did not solve the issue
+- successful means customer confirmed it worked
+"""
+
+    client.retain(
+        bank_id=bank_id,
+        content=content,
+        context="ResolveIQ troubleshooting history"
+    )
+
+    return "Troubleshooting memory stored successfully"

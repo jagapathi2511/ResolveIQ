@@ -6,8 +6,18 @@ from pydantic import BaseModel, ConfigDict, EmailStr
 
 class CustomerCreate(BaseModel):
     name: str
-    email: EmailStr
+    email: str
+    password: str
 
+
+class CustomerLogin(BaseModel):
+    email: str
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
 
 class CustomerResponse(BaseModel):
     id: int
@@ -59,3 +69,13 @@ class MemoryChatResponse(BaseModel):
     customer_id: int
     previous_memories: list[str]
     response: str
+
+class TroubleshootingAttemptCreate(BaseModel):
+    step: str
+    outcome: str
+    notes: str | None = None
+class TroubleshootingFeedback(BaseModel):
+    customer_id: int
+    ticket_id: int
+    successful: bool
+    notes: str | None = None
